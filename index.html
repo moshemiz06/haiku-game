@@ -30,6 +30,7 @@
     text-shadow: 0 0 10px rgba(255, 160, 70, 0.45);
   }
   #mult { font-size: 16px; font-weight: 600; color: #ffb36b; letter-spacing: 0.08em; }
+  #chain { font-size: 14px; font-weight: 700; color: #7cf7ff; letter-spacing: 0.1em; min-height: 18px; }
 
   #heat-label {
     position: fixed; bottom: 34px; left: 50%; transform: translateX(-50%);
@@ -61,7 +62,7 @@
 <body>
 <canvas id="game"></canvas>
 <div id="vignette"></div>
-<div id="hud"><div id="score">0</div><div id="mult">×1</div></div>
+<div id="hud"><div id="score">0</div><div id="mult">×1</div><div id="chain"></div></div>
 <div id="heat-label">HEAT</div>
 <div id="heat-wrap"><div id="heat"></div></div>
 <div id="overlay"></div>
@@ -88,6 +89,7 @@
   const scoreEl = document.getElementById('score');
   const multEl = document.getElementById('mult');
   const heatEl = document.getElementById('heat');
+  const chainEl = document.getElementById('chain');
 
   const rand = (a, b) => a + Math.random() * (b - a);
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -182,7 +184,8 @@
     const x = Math.cos(ang) * SPAWN_R, y = Math.sin(ang) * SPAWN_R;
     const speed = rand(130, 170) * Math.min(2.2, 1 + elapsed * 0.012);
     let vx, vy;
-    if (Math.random() < 0.4) {
+    // Hunters become more common the longer you survive: 30% at the start, capped at 60%
+    if (Math.random() < Math.min(0.6, 0.3 + elapsed * 0.005)) {
       [vx, vy] = hunterVelocity(x, y, speed);
     } else {
       // Drifters aim near the sun so they swing past it on curved paths
@@ -474,6 +477,7 @@
   function drawHud() {
     scoreEl.textContent = Math.floor(score).toLocaleString();
     multEl.textContent = `×${multiplier()}`;
+    chainEl.textContent = comboTimer > 0 && combo > 1 ? `CHAIN ×${combo}` : '';
     heatEl.style.width = `${(player.heat * 100).toFixed(1)}%`;
     vignetteEl.style.opacity = (player.heat * 0.9).toFixed(3);
   }
