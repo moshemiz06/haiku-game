@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>Orbit Flip</title>
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml" />
+<meta name="description" content="Orbit the sun, reverse your orbit, dive for heat, and dodge asteroids that the sun's gravity bends. A tiny browser game." />
+<meta name="theme-color" content="#05030f" />
+<meta property="og:title" content="Orbit Flip" />
+<meta property="og:description" content="Orbit the sun, reverse your orbit, dive for heat, and dodge gravity-bent asteroids." />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://moshemiz06.github.io/haiku-game/" />
+<meta property="og:image" content="https://moshemiz06.github.io/haiku-game/assets/og.png" />
+<meta name="twitter:card" content="summary_large_image" />
 <style>
   * { box-sizing: border-box; }
   html, body {
@@ -132,10 +140,11 @@
   let spawnTimer = 0, starTimer = 0, diving = false;
   let combo = 0, comboTimer = 0, muted = false;
   try { muted = localStorage.getItem(MUTE_KEY) === '1'; } catch (_) {}
-  let player, asteroids, stardust, particles, trail, rings, popups;
+  let player, asteroids, stardust, particles, trail, rings, popups, comets, cometTimer, beatBest;
 
   function reset() {
     asteroids = []; stardust = []; particles = []; trail = []; rings = []; popups = [];
+    comets = []; cometTimer = 20; beatBest = false;
     player = { theta: -Math.PI / 2, r: R_BASE, dir: 1, heat: 0, x: 0, y: 0 };
     placePlayer();
     score = 0; elapsed = 0; diving = false;
@@ -223,6 +232,16 @@
     });
   }
 
+  // Rare gold comet: harmless, fast, and worth a big bonus if you catch it
+  function spawnComet() {
+    const ang = rand(0, TAU);
+    const x = Math.cos(ang) * SPAWN_R, y = Math.sin(ang) * SPAWN_R;
+    const aim = rand(0, TAU), aimR = rand(0, 200);
+    const dx = Math.cos(aim) * aimR - x, dy = Math.sin(aim) * aimR - y, len = Math.hypot(dx, dy);
+    const speed = rand(300, 340);
+    comets.push({ x, y, vx: (dx / len) * speed, vy: (dy / len) * speed, age: 0, tail: [] });
+  }
+
   function burst(x, y, color, count, speed) {
     for (let i = 0; i < count; i++) {
       const a = rand(0, TAU), s = rand(0.2, 1) * speed;
@@ -292,6 +311,35 @@
       }
       return true;
     });
+
+    cometTimer -= dt;
+    if (cometTimer <= 0) {
+      spawnComet();
+      cometTimer = rand(24, 36);
+    }
+    comets = comets.filter((c) => {
+      gravityStep(c, dt);
+      c.age += dt;
+      c.tail.push({ x: c.x, y: c.y });
+      if (c.tail.length > 16) c.tail.shift();
+      if (Math.hypot(c.x - p.x, c.y - p.y) < 24) {
+        const gain = 300 * mult;
+        score += gain;
+        burst(c.x, c.y, '#fff3c4', 30, 260);
+        popup(c.x, c.y - 16, `COMET +${gain}`, '#fff3c4');
+        ring(c.x, c.y, '#fff3c4');
+        tone(1320, 0.25, 'triangle', 0.07, 1.4);
+        return false;
+      }
+      return c.age < 12 && Math.hypot(c.x, c.y) < 1200 && Math.hypot(c.x, c.y) > SUN_R;
+    });
+
+    if (!beatBest && best > 0 && score >= best) {
+      beatBest = true;
+      popup(p.x, p.y - 44, 'NEW BEST!', '#ffb36b');
+      ring(p.x, p.y, '#ffb36b');
+      tone(1040, 0.3, 'triangle', 0.07, 1.5);
+    }
 
     let hit = false;
     asteroids = asteroids.filter((a) => {
@@ -501,10 +549,12 @@
   }
 
   function drawSun() {
-    const pulse = 1 + 0.06 * Math.sin(clock * 2.2);
-    const glowR = SUN_R * 4 * pulse;
+    // The sun flares up as the satellite dives closer, so heat is visible at the source
+    const heat = player ? player.heat : 0;
+    const pulse = 1 + (0.06 + 0.05 * heat) * Math.sin(clock * (2.2 + 3 * heat));
+    const glowR = SUN_R * (4 + heat) * pulse;
     const glow = ctx.createRadialGradient(0, 0, SUN_R * 0.6, 0, 0, glowR);
-    glow.addColorStop(0, 'rgba(255, 170, 80, 0.55)');
+    glow.addColorStop(0, `rgba(255, 170, 80, ${0.55 + 0.35 * heat})`);
     glow.addColorStop(0.45, 'rgba(255, 90, 40, 0.15)');
     glow.addColorStop(1, 'rgba(255, 60, 20, 0)');
     ctx.fillStyle = glow;
@@ -567,6 +617,32 @@
     ctx.strokeStyle = 'rgba(255, 200, 150, 0.3)';
     ctx.stroke();
     ctx.setLineDash([]);
+  }
+
+  function drawComets() {
+    for (const c of comets) {
+      for (let i = 0; i < c.tail.length; i++) {
+        const t = c.tail[i], f = (i + 1) / c.tail.length;
+        ctx.globalAlpha = f * 0.6;
+        ctx.fillStyle = '#fff3c4';
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, 2 + 4 * f, 0, TAU);
+        ctx.fill();
+      }
+      const glow = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, 26);
+      glow.addColorStop(0, 'rgba(255, 243, 196, 0.9)');
+      glow.addColorStop(1, 'rgba(255, 243, 196, 0)');
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, 26, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, 5, 0, TAU);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
   }
 
   function drawAsteroids() {
@@ -686,14 +762,16 @@
   function drawIncomingWarnings() {
     const hx = (W / 2 - 24) / scale, hy = (H / 2 - 24) / scale; // world-unit bounds inset from the edge
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = '#ffb36b';
-    for (const a of asteroids) {
-      if (Math.abs(a.x) <= hx && Math.abs(a.y) <= hy) continue;
-      const k = Math.min(hx / Math.max(Math.abs(a.x), 1), hy / Math.max(Math.abs(a.y), 1));
-      ctx.globalAlpha = 0.85;
-      ctx.beginPath();
-      ctx.arc(W / 2 + a.x * k * scale, H / 2 + a.y * k * scale, 4, 0, TAU);
-      ctx.fill();
+    for (const [list, color] of [[asteroids, '#ffb36b'], [comets, '#fff3c4']]) {
+      ctx.fillStyle = color;
+      for (const a of list) {
+        if (Math.abs(a.x) <= hx && Math.abs(a.y) <= hy) continue;
+        const k = Math.min(hx / Math.max(Math.abs(a.x), 1), hy / Math.max(Math.abs(a.y), 1));
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.arc(W / 2 + a.x * k * scale, H / 2 + a.y * k * scale, 4, 0, TAU);
+        ctx.fill();
+      }
     }
     ctx.globalAlpha = 1;
   }
@@ -720,6 +798,7 @@
     drawSun();
     drawOrbitGuides();
     drawStardust();
+    drawComets();
     drawAsteroids();
     drawTrail();
     drawPlayer();
