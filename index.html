@@ -50,6 +50,10 @@
     background: rgba(255, 255, 255, 0.08); overflow: hidden;
   }
   #heat { height: 100%; width: 0; background: linear-gradient(90deg, #7cf7ff, #ffb36b, #fff3c4); box-shadow: 0 0 12px #ffb36b; }
+  #heat.critical { background: linear-gradient(90deg, #ffb36b, #ff5a3c); box-shadow: 0 0 14px #ff5a3c; animation: throb 0.3s steps(2) infinite; }
+  #heat.venting { background: #ff5a3c; box-shadow: 0 0 14px #ff5a3c; opacity: 0.6; }
+  #heat-label.venting, #mult.venting { color: #ff7a5c; }
+  @keyframes throb { 50% { opacity: 0.45; } }
 
   #overlay {
     position: fixed; inset: 0; display: flex; flex-direction: column;
@@ -96,7 +100,10 @@
   const SPAWN_R = 640;
   const PLAYER_R = 8;
   const NEAR_MISS = 26;   // how close an asteroid must pass to count as a near miss
-  const GM = 3.2e6;       // the sun's gravity: it bends asteroid paths too
+  const HEAT_GAIN = 1.35; // heat chases (closeness × this); above 1 means a long dive overheats
+  const HEAT_RECOVER = 0.3; // after overheating, heat must fall this low before you can dive again
+  const VENT_RATE = 0.45;   // heat lost per second while venting
+  const GM = 3.2e6;      // the sun's gravity: it bends asteroid paths too
   const BEST_KEY = 'orbit-flip-best';
   const MUTE_KEY = 'orbit-flip-muted';
   const reduceMotion = Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -110,6 +117,7 @@
   const heatEl = document.getElementById('heat');
   const chainEl = document.getElementById('chain');
   const flashEl = document.getElementById('flash');
+  const heatLabelEl = document.getElementById('heat-label');
 
   const rand = (a, b) => a + Math.random() * (b - a);
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -145,14 +153,14 @@
   function reset() {
     asteroids = []; stardust = []; particles = []; trail = []; rings = []; popups = [];
     comets = []; cometTimer = 20; beatBest = false;
-    player = { theta: -Math.PI / 2, r: R_BASE, dir: 1, heat: 0, x: 0, y: 0 };
+    player = { theta: -Math.PI / 2, r: R_BASE, dir: 1, prox: 0, heat: 0, overheated: false, x: 0, y: 0 };
     placePlayer();
     score = 0; elapsed = 0; diving = false;
     combo = 0; comboTimer = 0;
     spawnTimer = 1.2; starTimer = 0.4;
   }
 
-  const multiplier = () => 1 + Math.round(player.heat * 4);
+  const multiplier = () => (player.overheated ? 1 : 1 + Math.round(player.heat * 4));
 
   function placePlayer() {
     const p = player;
@@ -163,7 +171,7 @@
 
   // Where the satellite will be t seconds from now if it keeps its current orbit
   function playerAt(t) {
-    const p = player, th = p.theta + p.dir * (0.9 + 1.6 * p.heat) * t;
+    const p = player, th = p.theta + p.dir * (0.9 + 1.6 * p.prox) * t;
     return [Math.cos(th) * p.r, Math.sin(th) * p.r];
   }
 
@@ -279,12 +287,23 @@
       starTimer = rand(0.9, 1.6);
     }
 
-    // Hold to dive toward the sun; let go and you spiral back out
-    const target = diving ? R_MIN : R_BASE;
-    p.r += (target - p.r) * Math.min(1, dt * (diving ? 2.6 : 1.5));
-    p.heat = clamp((R_BASE - p.r) / (R_BASE - R_MIN), 0, 1);
+    // Hold to dive toward the sun; let go and you spiral back out. An overheated satellite can't dive
+    const dive = diving && !p.overheated;
+    const target = dive ? R_MIN : R_BASE;
+    p.r += (target - p.r) * Math.min(1, dt * (dive ? 2.6 : p.overheated ? 3 : 1.5));
+    p.prox = clamp((R_BASE - p.r) / (R_BASE - R_MIN), 0, 1);
+
+    // Heat is a gauge, not a position: it builds while you hug the sun and bleeds off when you back away
+    if (p.overheated) {
+      p.heat = Math.max(0, p.heat - VENT_RATE * dt);
+      if (p.heat <= HEAT_RECOVER) p.overheated = false;
+    } else {
+      const goal = p.prox * HEAT_GAIN;
+      p.heat = Math.min(1, p.heat + (goal - p.heat) * Math.min(1, dt * (goal > p.heat ? 0.6 : 1)));
+      if (p.heat >= 1) overheat();
+    }
     // Closer orbits sweep faster, so diving is also a sprint
-    p.theta += p.dir * (0.9 + 1.6 * p.heat) * dt;
+    p.theta += p.dir * (0.9 + 1.6 * p.prox) * dt;
     placePlayer();
 
     const mult = multiplier();
@@ -372,6 +391,20 @@
     if (hit) die();
   }
 
+  // Too long near the sun: the multiplier is lost and the satellite is forced out until it cools
+  function overheat() {
+    const p = player;
+    p.overheated = true;
+    p.heat = 1;
+    combo = 0;
+    comboTimer = 0;
+    shake = reduceMotion ? 0 : 10;
+    burst(p.x, p.y, '#ff5a3c', 36, 260);
+    ring(p.x, p.y, '#ff5a3c');
+    popup(p.x, p.y - 30, 'OVERHEATED', '#ff7a5c');
+    tone(240, 0.4, 'sawtooth', 0.07, 0.4);
+  }
+
   function idle(dt) {
     player.theta += 0.9 * dt; // title screen: the satellite orbits on its own
     placePlayer();
@@ -414,7 +447,7 @@
     showOverlay(`
       <h1>ORBIT FLIP</h1>
       <p>Click or tap to reverse your orbit.</p>
-      <p>Hold to dive toward the sun. The hotter you burn, the bigger your multiplier.</p>
+      <p>Hold to dive toward the sun. The hotter you burn, the bigger your multiplier, but stay too long and you overheat.</p>
       <p>Grab the cyan stardust. Skim asteroids for near-miss bonuses. The sun bends their paths too.</p>
       ${best ? `<p>Best <b>${best}</b></p>` : ''}
       <p class="hint">Click, tap or press Space to launch · M mutes sound</p>`);
@@ -544,8 +577,14 @@
     scoreEl.textContent = Math.floor(score).toLocaleString();
     multEl.textContent = `×${multiplier()}`;
     chainEl.textContent = comboTimer > 0 && combo > 1 ? `CHAIN ×${combo}` : '';
-    heatEl.style.width = `${(player.heat * 100).toFixed(1)}%`;
-    vignetteEl.style.opacity = (player.heat * 0.9).toFixed(3);
+    const p = player;
+    heatEl.style.width = `${(p.heat * 100).toFixed(1)}%`;
+    heatEl.classList.toggle('critical', !p.overheated && p.heat > 0.85);
+    heatEl.classList.toggle('venting', p.overheated);
+    heatLabelEl.classList.toggle('venting', p.overheated);
+    multEl.classList.toggle('venting', p.overheated);
+    heatLabelEl.textContent = p.overheated ? 'OVERHEATED' : p.heat > 0.85 ? 'PULL AWAY' : 'HEAT';
+    vignetteEl.style.opacity = (p.overheated ? 0.5 + 0.3 * Math.sin(clock * 20) : p.heat * 0.9).toFixed(3);
   }
 
   function drawSun() {
