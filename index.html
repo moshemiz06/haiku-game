@@ -816,7 +816,11 @@
     last = now;
     clock += dt;
 
-    if (state === 'play') { update(dt); drawHud(); }
+    if (state === 'play') {
+      update(dt);
+      // update() can end the run and die() has just cleared the heat vignette, so don't repaint it over the game-over screen
+      if (state === 'play') drawHud();
+    }
     else if (state === 'title') idle(dt);
 
     updateFx(dt);
